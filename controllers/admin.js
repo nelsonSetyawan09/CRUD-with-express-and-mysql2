@@ -1,86 +1,220 @@
+const { validationResult } = require('express-validator/check');
+const mongoose = require('mongoose')
+
 const Product = require('../models/product');
+const fileDelete = require('../util/file-delete');
 
 
-// path di sini cuma tambahan info
-// buat class active bootstrap
-// bukan path url
-// path url ada di routes
-exports.getAddProduct = (req,res,next)=>{
-    res.render('admin/edit-product', {
-        docTitle:'add-product',
-        path:'/admin/add-product',
-        editing: false
+exports.getAddProduct = (req, res, next) => {
+  let message = req.flash('error');
+    if (message.length > 0) {
+      message = message[0];
+    } else {
+      message = null;
+  }
+  res.render('admin/edit-product', {
+    pageTitle: 'Add Product',
+    path: '/admin/add-product',
+    editing: false,
+    hasError:false,
+    errorMessage: message,
+    validationError:[]
+  });
+};
+
+
+exports.postAddProduct = (req, res, next) => {
+  const title = req.body.title;
+  const image = req.file;
+  const price = req.body.price;
+  const description = req.body.description;
+  const errors = validationResult(req);
+
+  if(!image){
+    return res.status(422).render('admin/edit-product',{
+        pageTitle: 'Add Product',
+        path: '/admin/add-product',
+        editing: false,
+        hasError:true,
+        errorMessage: 'attack file is not a image',
+        validationError: [],
+        product:{
+          title,
+          price,
+          description,
+        }
+    })
+  }
+
+  if (!errors.isEmpty()) {
+    // console.log(errors.array())
+    return res.status(422).render('admin/edit-product',{
+        pageTitle: 'Add Product',
+        path: '/admin/add-product',
+        editing: false,
+        hasError:true,
+        errorMessage: errors.array()[0].msg,
+        validationError: errors.array(),
+        product:{
+          title,
+          price,
+          description,
+        }
+
+    })
+  }
+  // image dlm bentuk object = {..., path} berkat multer
+  const imageUrl = image.path;
+  const product = new Product({
+    // _id: new mongoose.Types.ObjectId('5cda0209a6a856590e6c9454'),
+    title: title,
+    price: price,
+    description: description,
+    imageUrl: imageUrl,
+    userId: req.user
+  });
+  product
+    .save()
+    .then(result => {
+      // console.log(result);
+      console.log('Created Product');
+      res.redirect('/admin/products');
+    })
+    .catch(err => {
+      console.log('errrror katanya!!');
+
+      const error = new Error(err);
+      error.httpStatusCode = 500;
+      // next(error), men-skip all middleware and right a way to
+      //  error handling middleware
+      return next(error)
     });
 };
 
-exports.postDeleteProduct = (req,res,next) =>{
-    let productId = req.body.productId;
-    Product.deleteById(productId)
-        .then(() =>{
-            res.redirect('/admin/products');
-        })
-        .catch(err => console.log(err));
-}
-
-exports.getEditProduct = (req,res,next)=>{
-    let editMode = req.query.edit;  // came from express
-    if(!editMode){
-        return res.redirect('/')
-    }
-    let _editMode=false
-    if(editMode == 'true'){ _editMode=true}
-    let productId = req.params.productId;
-    Product.findById(productId)
-        .then(([product]) =>{
-            if(!product){
-                return res.redirect('/')
-            }
-            res.render('admin/edit-product', {
-                product: product[0],
-                docTitle:'edit-product',
-                path:'/admin/edit-product',
-                editing: _editMode
-            });
-        })
-        .catch(err => console.log(err));
+exports.getEditProduct = (req, res, next) => {
+  const editMode = req.query.edit;
+  if (!editMode) {
+    return res.redirect('/');
+  }
+  const prodId = req.params.productId;
+  Product.findById(prodId)
+    .then(product => {
+      if (!product) {
+        req.flash('error', 'No found that product with Created by user.');
+        return res.redirect('/');
+      }
+      res.render('admin/edit-product', {
+        pageTitle: 'Edit Product',
+        path: '/admin/edit-product',
+        editing: editMode,
+        product: product,
+        hasError:false,
+        errorMessage: '',
+        validationError: [],
+      });
+    })
+    .catch(err =>{
+      const error = new Error(err);
+      error.httpStatusCode = 500;
+      //  next(error), men-skip all middleware and right a way to
+      //  error handling middleware
+      return next(error)
+    });
 };
 
-// https://cdn.pixabay.com/photo/2016/03/31/20/51/book-1296045_960_720.png
-exports.postAddProduct =  (req,res,next) =>{
-    // req.body.title, req.body.imageUrl
-    // itu bisa diketahui oleh javascript
-    // berkat ada menambahan attribute name pada element html
-    let {title, imageUrl, price, description} = req.body;
-    const product = new Product(null,title, imageUrl, description, price);
-    product.save()
-        .then(() =>{
-            res.redirect('/');
-        })
-        .catch(err => console.log(err));
+exports.postEditProduct = (req, res, next) => {
+  const prodId = req.body.productId;
+  const updatedTitle = req.body.title;
+  const updatedPrice = req.body.price;
+  const image = req.file;
+  const updatedDesc = req.body.description;
+  const errors = validationResult(req);
+
+
+  if (!errors.isEmpty()) {
+    return res.status(422).render('admin/edit-product',{
+        pageTitle: 'Edit Product',
+        path: '/admin/add-product',
+        editing: true,
+        hasError:true,
+        errorMessage: errors.array()[0].msg,
+        validationError: errors.array(),
+        product:{
+          title: updatedTitle,
+          price: updatedPrice,
+          description: updatedDesc,
+          _id: prodId
+        }
+    })
+  }
+
+  Product.findById(prodId)
+    .then(product => {
+      if (product.userId.toString() !== req.user._id.toString()) {
+        return res.redirect('/');
+      }
+      product.title = updatedTitle;
+      product.price = updatedPrice;
+      product.description = updatedDesc;
+      if(image){
+        fileDelete.fileDelete(product.imageUrl);
+        product.imageUrl = image.path;
+      }
+      return product.save().then(result => {
+        console.log('UPDATED PRODUCT!');
+        res.redirect('/admin/products');
+      });
+    })
+    .catch(err =>{
+      const error = new Error(err);
+      error.httpStatusCode = 500;
+      //  next(error), men-skip all middleware and right a way to
+      //  error handling middleware
+      return next(error)
+    });
 };
 
-exports.postEditProduct =  (req,res,next) =>{
-    // req.body.title, req.body.imageUrl
-    // itu bisa diketahui oleh javascript
-    // berkat ada menambahan attribute name pada element html
-    let {productId,title, imageUrl, price, description} = req.body;
-    const product = new Product(productId, title, imageUrl, description, price);
-    product.editById()
-        .then(()=>{
-            res.redirect('/admin/products');
-        })
-        .catch(err => console.log(err));
+
+exports.getProducts = (req, res, next) => {
+  Product.find({ userId: req.user._id })
+    // .select('title price -_id')
+    // .populate('userId', 'name')
+    .then(products => {
+      // console.log(products);
+      res.render('admin/products', {
+        prods: products,
+        pageTitle: 'Admin Products',
+        path: '/admin/products'
+      });
+    })
+    .catch(err =>{
+      const error = new Error(err);
+      error.httpStatusCode = 500;
+      //  next(error), men-skip all middleware and right a way to
+      //  error handling middleware
+      return next(error)
+    });
 };
 
-exports.getProducts = (req,res,next) =>{
-    Product.fetchAll()
-        .then(([products, dataFields]) =>{
-            res.render('admin/products', {
-                products,
-                docTitle: 'Admin Products',
-                path:'/admin/products',
-                hasProducts: products.length>0
-            });
-        })
-        .catch(err => console.log(err));
-}
+exports.postDeleteProduct = (req, res, next) => {
+  const prodId = req.body.productId;
+  Product.findById(prodId)
+    .then(product =>{
+      if(!product){
+        return next(new Error('product not found!!'))
+      }
+      fileDelete.fileDelete(product.imageUrl);
+      return Product.deleteOne({ _id: prodId, userId: req.user._id })
+    })
+    .then(() => {
+      console.log('DESTROYED PRODUCT');
+      res.redirect('/admin/products');
+    })
+    .catch(err =>{
+      const error = new Error(err);
+      error.httpStatusCode = 500;
+      //  next(error), men-skip all middleware and right a way to
+      //  error handling middleware
+      return next(error)
+    });
+};
